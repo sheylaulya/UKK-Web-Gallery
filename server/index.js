@@ -9,7 +9,13 @@ import session from "express-session";
 import cookieParser from "cookie-parser";
 import multer from "multer";
 import path from "path"
-
+import jwt from "jsonwebtoken"
+import {
+    verify
+} from "crypto";
+import {
+    decode
+} from "punycode";
 
 const app = express();
 
@@ -28,9 +34,9 @@ app.use(cors({
 }));
 
 app.use(cookieParser())
-app.use(bodyParser.urlencoded({
-    extended: true
-}));
+// app.use(bodyParser.urlencoded({
+//     extended: true
+// }));
 
 app.use(session({
     key: "UserID",
@@ -50,90 +56,110 @@ const db = mysql.createConnection({
     database: "webgaleri"
 })
 
-app.get("/", (req, res) => {
-        res.json("Hello you are entering the client server")
-    }),
-
-    app.post("/users/register", (req, res) => {
-        const username = req.body.username;
-        const email = req.body.email;
-        const password = req.body.password;
 
 
-
-        bcrypt.hash(password, saltRounds, (err, hash) => {
-            if (err) {
-                console.log(err)
-            }
-            db.query(
-                "INSERT INTO user (`Username`,`Email`,`Password`) VALUES (?,?,?)",
-                [username, email, hash],
-                (err, result) => {
-                    console.log(err);
-                })
-        })
-
-    }),
-
-    app.get("/users/login", (req, res) => {
-        if (req.session.user) {
-            res.send({
-                loggedIn: true,
-                user: req.session.user
-            });
-        } else {
-            res.send({
-                loggedIn: false
-            })
-        }
-    })
-
-app.post("/users/login", (req, res) => {
+// Regist
+app.post("/users/register", (req, res) => {
     const username = req.body.username;
+    const email = req.body.email;
     const password = req.body.password;
 
-    console.log("Received login request for username:", username);
-    console.log("This is the pass that i input:", password);
 
-    db.query(
-        "SELECT * FROM user WHERE Username = ?",
-        [username],
-        (err, result) => {
-            if (err) {
 
-                res.send({
-                    err: err
-                });
-            } else {
-
-                if (result.length > 0) {
-
-                    bcrypt.compare(password, result[0].Password,
-                        (error, response) => {
-
-                            if (response) {
-                                req.session.user = result,
-
-                                    res.send(result);
-
-                            } else {
-                                res.send({
-                                    message: "Wrong username/password combination!"
-                                });
-                            }
-                        });
-                } else {
-                    console.log("User not found for username:", username);
-                    res.send({
-                        message: "User doesn't exist"
-                    });
-                }
-            }
+    bcrypt.hash(password, saltRounds, (err, hash) => {
+        if (err) {
+            console.log(err)
         }
-    );
-});
+        db.query(
+            "INSERT INTO user (`Username`,`Email`,`Password`) VALUES (?,?,?)",
+            [username, email, hash],
+            (err, result) => {
+                console.log(err);
+            })
+    })
+
+})
+// End Regist
 
 
+// Login
+
+const verifyUser = (req, res, next) => { 
+   
+    const token = req.headers['Authorization'] 
+ 
+    console.log(token) 
+    if (!token) { 
+        return res.json({ 
+            message: "We need to provide token!!!!!!!!!!" 
+        }) 
+    } else { 
+        jwt.verify(token, "our-jsonwebtoken-secret-key", (err, decoded) => { 
+            if (err) { 
+                return res.json({ 
+                    message: "authentication error!!!!!!!!" 
+                }) 
+            } else { 
+                req.name = decoded.name; 
+                next(); 
+            } 
+        }) 
+    } 
+}
+
+
+app.get("/", verifyUser, (req, res) => {
+        return res.json({
+            status: 'success',
+            name: req.name
+        })
+    }
+    
+    ),
+
+
+    app.post("/users/login", (req, res) => {  
+        const q = "SELECT * FROM user WHERE Username = ?";  
+        db.query(q, [req.body.Username], async (err, data) => {  
+            if (err) return res.json({  
+                message: "Error"  
+            });  
+      
+            if (data.length > 0) {  
+                const user = data[0];  
+                const match = await bcrypt.compare(req.body.Password, user.Password);  
+                if (match) {  
+                    const name = user.Username;  
+                    const token = jwt.sign({  
+                        name  
+                    }, "our-jsonwebtoken-secret-key", {  
+                        expiresIn: '1d'  
+                    });  
+                    // ini yang gua rubah 
+                    // res.cookie('token', token);  
+     
+                    // jadi kalo login nya berhasil lu kirim token nya ke react 
+                    return res.json({  
+                        token, // ini yang gua rubah 
+                        status: "success",  
+                    });  
+      
+                } else {  
+                    return res.json({  
+                        message: "Invalid Username or Password"  
+                    });  
+                }  
+            } else {  
+                return res.json({  
+                    message: "No Records Existed"  
+                });  
+            }  
+              
+        });  
+    });
+// End Login
+
+// CRUD POSTS
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, 'public/images')
@@ -175,25 +201,25 @@ app.get('/home', (req, res) => {
 
 app.get('/posts/:id', (req, res) => {
     const FotoID = req.params.id;
-    const q = 'SELECT * FROM foto WHERE FotoID = ?'    
-    
-    db.query(q, [FotoID], (err,data)=>{
-        if(err) return res.json(err);
+    const q = 'SELECT * FROM foto WHERE FotoID = ?'
+
+    db.query(q, [FotoID], (err, data) => {
+        if (err) return res.json(err);
         return res.json(data)
     })
     // console.log(values)
 })
 
-app.delete("/posts/delete/:id", (req,res)=>{
+app.delete("/posts/delete/:id", (req, res) => {
     const id = req.params.id;
     const q = "DELETE FROM foto WHERE FotoID = ?"
 
-    db.query(q,[id], (err,data)=>{
-        if(err) return res.json(err);
+    db.query(q, [id], (err, data) => {
+        if (err) return res.json(err);
         return res.json("Done delete bang")
     })
 })
-
+// End CRUD Posts
 
 
 
